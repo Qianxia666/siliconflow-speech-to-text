@@ -42,6 +42,10 @@ python app.py
 
 4. 在浏览器中访问 `http://localhost:5000`
 
+## Deploy to Vercel
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FQianxia666%2Fsiliconflow-speech-to-text)
+
 ## 使用说明
 
 1. 打开应用后，你会看到一个简洁的上传界面
