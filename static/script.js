@@ -1,329 +1,506 @@
 document.addEventListener('DOMContentLoaded', function() {
-    // --- 元素获取 ---
+    const configuredMaxBytes = Number.parseInt(document.body.dataset.maxUploadBytes, 10);
+    const configuredMaxMb = Number.parseInt(document.body.dataset.maxUploadMb, 10);
+    const MAX_UPLOAD_BYTES = Number.isSafeInteger(configuredMaxBytes) && configuredMaxBytes > 0
+        ? configuredMaxBytes
+        : 100 * 1024 * 1024;
+    const MAX_UPLOAD_MB = Number.isSafeInteger(configuredMaxMb) && configuredMaxMb > 0
+        ? configuredMaxMb
+        : Math.ceil(MAX_UPLOAD_BYTES / (1024 * 1024));
+    const configuredMaxTextChars = Number.parseInt(document.body.dataset.maxTextChars, 10);
+    const MAX_TEXT_CHARS = Number.isSafeInteger(configuredMaxTextChars) && configuredMaxTextChars > 0
+        ? configuredMaxTextChars
+        : 250000;
+
+    const transcriptionForm = document.getElementById('transcriptionForm');
     const audioFileInput = document.getElementById('audioFile');
+    const audioFileLabel = document.getElementById('audioFileLabel');
+    const fileSummary = document.getElementById('fileSummary');
     const fileNameDisplay = document.getElementById('fileNameDisplay');
+    const fileMetaDisplay = document.getElementById('fileMetaDisplay');
     const submitBtn = document.getElementById('submitBtn');
     const statusMessage = document.getElementById('statusMessage');
+    const workspaceStatus = document.getElementById('workspaceStatus');
+    const resultContent = document.getElementById('resultContent');
+    const emptyState = document.getElementById('emptyState');
+    const activeViewLabel = document.getElementById('activeViewLabel');
+    const resultStats = document.getElementById('resultStats');
     const transcriptionResult = document.getElementById('transcriptionResult');
     const copyBtn = document.getElementById('copyBtn');
     const recalibrateBtn = document.getElementById('recalibrateBtn');
     const summarizeBtn = document.getElementById('summarizeBtn');
     const generateNotesBtn = document.getElementById('generateNotesBtn');
+    const sourceTab = document.getElementById('sourceTab');
+    const summaryTab = document.getElementById('summaryTab');
+    const notesTab = document.getElementById('notesTab');
+    const viewTabs = [sourceTab, summaryTab, notesTab];
+    const resultsWorkspace = document.querySelector('.workspace');
 
-    // --- 状态变量 ---
-    let currentRawTranscription = null;
-    let currentCalibratedText = null;
-    let summaryText = null;
-    let isShowingSummary = false;
-    let notesText = null;
-    let isShowingNotes = false;
+    const featureConfigured = {
+        s2t: document.body.dataset.s2tConfigured === 'true',
+        calibration: document.body.dataset.calibrationConfigured === 'true',
+        summary: document.body.dataset.summaryConfigured === 'true',
+        notes: document.body.dataset.notesConfigured === 'true'
+    };
 
-    // --- UI 更新函数 ---
+    const viewLabels = {
+        source: '原文',
+        summary: '摘要',
+        notes: '笔记'
+    };
+
+    let selectedFile = null;
+    let currentRawTranscription = '';
+    let currentCalibratedText = '';
+    let summaryText = '';
+    let notesText = '';
+    let activeView = 'source';
+    let busy = false;
+
+    function getButtonLabel(button) {
+        const label = button.querySelector('[data-button-label]');
+        return label ? label.textContent : button.textContent;
+    }
+
+    function setButtonLabel(button, text) {
+        const label = button.querySelector('[data-button-label]');
+        if (label) {
+            label.textContent = text;
+        } else {
+            button.textContent = text;
+        }
+    }
+
+    function formatFileSize(bytes) {
+        if (!Number.isFinite(bytes) || bytes < 0) return '大小未知';
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    function getFileType(file) {
+        const extension = file.name.includes('.') ? file.name.split('.').pop() : '';
+        return extension ? extension.toUpperCase() : '音频';
+    }
+
     function updateStatus(message, type) {
         statusMessage.textContent = message || '';
-        statusMessage.classList.remove('error', 'success', 'info', 'hidden');
-        if (type) {
-            statusMessage.classList.add(type);
-        } else {
-            statusMessage.classList.add('hidden');
+        statusMessage.className = 'status-message';
+        if (!message || !type) {
+            statusMessage.hidden = true;
+            return;
         }
-        if (message && type) {
-            statusMessage.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-    }
-    
-    function setActionButtonsDisabledState(disabled) {
-        // 主提交按钮是独立的
-        submitBtn.disabled = disabled;
-        
-        // 结果区域的操作按钮
-        const hasContent = currentCalibratedText && currentCalibratedText.trim() !== '';
-        recalibrateBtn.disabled = disabled || !hasContent;
-        copyBtn.disabled = disabled || transcriptionResult.textContent.trim() === '';
-        summarizeBtn.disabled = disabled || !hasContent;
-        generateNotesBtn.disabled = disabled || !hasContent;
+        statusMessage.classList.add(type);
+        statusMessage.hidden = false;
     }
 
-    // --- 状态重置函数 ---
-    function resetSummaryState() {
-        summaryText = null;
-        isShowingSummary = false;
-        summarizeBtn.textContent = '量子速读';
-        notesText = null;
-        isShowingNotes = false;
-        generateNotesBtn.textContent = '生成笔记';
-        if (currentCalibratedText) {
-            transcriptionResult.textContent = currentCalibratedText;
-        } else {
-            transcriptionResult.textContent = '';
+    function updateWorkspaceStatus() {
+        if (busy) {
+            workspaceStatus.textContent = '正在处理';
+            workspaceStatus.dataset.state = 'busy';
+            return;
         }
+        if (currentCalibratedText.trim()) {
+            workspaceStatus.textContent = '处理完成';
+            workspaceStatus.dataset.state = 'done';
+            return;
+        }
+        if (selectedFile) {
+            workspaceStatus.textContent = '准备就绪';
+            workspaceStatus.dataset.state = 'ready';
+            return;
+        }
+        workspaceStatus.textContent = '等待音频';
+        workspaceStatus.dataset.state = 'idle';
     }
 
-    // --- 事件监听器 ---
-    audioFileInput.addEventListener('change', function(e) {
-        const file = e.target.files[0];
-        if (file) {
-            // 1. 更新文件名 (保留)
-            fileNameDisplay.textContent = file.name;
-            
-            // 2. 清理上一次的转录结果和状态，为新任务做准备
-            updateStatus(null, null);
-            currentRawTranscription = null;
-            currentCalibratedText = null;
-            resetSummaryState(); // 重置摘要状态，这也会清空文本框
-    
-            // 3. 启用提交按钮，禁用其他操作按钮
-            submitBtn.disabled = false;
-            recalibrateBtn.disabled = true;
-            copyBtn.disabled = true;
-            summarizeBtn.disabled = true;
-            generateNotesBtn.disabled = true;
-            copyBtn.textContent = '复制文本'; // 确保复制按钮文本也被重置
-            copyBtn.classList.remove('copied-success', 'copied-error');
+    function getDisplayedText() {
+        if (activeView === 'summary') return summaryText;
+        if (activeView === 'notes') return notesText;
+        return currentCalibratedText;
+    }
 
+    function countCharacters(text) {
+        return Array.from(text).length;
+    }
+
+    function updateButtons() {
+        const hasSource = Boolean(currentCalibratedText.trim());
+        const rawWithinLimit = countCharacters(currentRawTranscription) <= MAX_TEXT_CHARS;
+        const sourceWithinLimit = countCharacters(currentCalibratedText) <= MAX_TEXT_CHARS;
+        submitBtn.disabled = busy || !selectedFile || !featureConfigured.s2t;
+        recalibrateBtn.disabled = busy || !featureConfigured.calibration || !currentRawTranscription.trim() || !rawWithinLimit;
+        summarizeBtn.disabled = busy || !featureConfigured.summary || !hasSource || !sourceWithinLimit;
+        generateNotesBtn.disabled = busy || !featureConfigured.notes || !hasSource || !sourceWithinLimit;
+        copyBtn.disabled = busy || !getDisplayedText().trim();
+        sourceTab.disabled = !hasSource;
+        summaryTab.disabled = !summaryText.trim();
+        notesTab.disabled = !notesText.trim();
+        updateWorkspaceStatus();
+    }
+
+    function renderView(view) {
+        if (view === 'summary' && !summaryText.trim()) return;
+        if (view === 'notes' && !notesText.trim()) return;
+        if (view === 'source' && !currentCalibratedText.trim()) {
+            activeView = 'source';
         } else {
-            // 如果用户取消了文件选择
-            fileNameDisplay.textContent = '未选择文件';
-            submitBtn.disabled = true;
+            activeView = view;
         }
-    });
-    
-    function handleSuccess(data, operationType) {
-        if (data.raw_transcription) {
+
+        const displayedText = getDisplayedText();
+        const hasText = Boolean(displayedText.trim());
+        transcriptionResult.textContent = displayedText;
+        activeViewLabel.textContent = viewLabels[activeView];
+        resultStats.textContent = `${countCharacters(displayedText).toLocaleString('zh-CN')} 字符`;
+        emptyState.hidden = hasText;
+        resultContent.hidden = !hasText;
+
+        viewTabs.forEach(function(tab) {
+            const selected = tab.dataset.view === activeView;
+            tab.classList.toggle('is-active', selected);
+            tab.setAttribute('aria-selected', String(selected));
+        });
+
+        setButtonLabel(summarizeBtn, summaryText ? '重新生成摘要' : '生成摘要');
+        setButtonLabel(generateNotesBtn, notesText ? '重新生成笔记' : '生成笔记');
+        updateButtons();
+    }
+
+    function resetDerivedResults() {
+        summaryText = '';
+        notesText = '';
+        activeView = 'source';
+        renderView('source');
+    }
+
+    function clearResults() {
+        currentRawTranscription = '';
+        currentCalibratedText = '';
+        summaryText = '';
+        notesText = '';
+        activeView = 'source';
+        setButtonLabel(copyBtn, '复制');
+        copyBtn.classList.remove('copied-success', 'copied-error');
+        renderView('source');
+    }
+
+    function setBusy(nextBusy) {
+        busy = nextBusy;
+        audioFileInput.disabled = nextBusy;
+        audioFileLabel.classList.toggle('is-disabled', nextBusy);
+        transcriptionForm.setAttribute('aria-busy', String(nextBusy));
+        resultsWorkspace.setAttribute('aria-busy', String(nextBusy));
+        updateButtons();
+    }
+
+    function extractErrorMessage(data, fallback) {
+        if (typeof data?.error === 'string') return data.error;
+        if (typeof data?.error?.message === 'string') return data.error.message;
+        if (typeof data?.message === 'string') return data.message;
+        return fallback;
+    }
+
+    async function fetchJson(url, options) {
+        const response = await fetch(url, options);
+        let data;
+        try {
+            data = await response.json();
+        } catch (_error) {
+            throw new Error(`服务返回了无效响应 (状态 ${response.status})`);
+        }
+        if (!response.ok) {
+            throw new Error(extractErrorMessage(data, `请求失败 (状态 ${response.status})`));
+        }
+        return data;
+    }
+
+    function handleTranscriptionSuccess(data, operationType) {
+        if (typeof data.transcription !== 'string' || !data.transcription.trim()) {
+            throw new Error(`${operationType}返回了空文本`);
+        }
+        if (typeof data.raw_transcription === 'string' && data.raw_transcription.trim()) {
             currentRawTranscription = data.raw_transcription;
         }
         currentCalibratedText = data.transcription;
-        
+        resetDerivedResults();
+        const overProcessingLimit = countCharacters(currentCalibratedText) > MAX_TEXT_CHARS;
         const messageType = data.is_calibrated ? 'success' : 'info';
-        updateStatus(data.calibration_message || `${operationType}完成。`, messageType);
-        transcriptionResult.textContent = data.transcription;
-        
-        resetSummaryState();
+        const baseMessage = data.calibration_message || `${operationType}完成。`;
+        updateStatus(
+            overProcessingLimit
+                ? `${baseMessage} 文本超过 ${MAX_TEXT_CHARS.toLocaleString('zh-CN')} 字符，已禁用校准、摘要和笔记处理。`
+                : baseMessage,
+            overProcessingLimit ? 'info' : messageType
+        );
     }
 
-    submitBtn.addEventListener('click', async function(event) {
-        event.preventDefault();
-        const file = audioFileInput.files[0];
+    function handleSelectedFile(file) {
+        clearResults();
+        updateStatus('', null);
+
         if (!file) {
-            updateStatus('请先选择一个音频文件。', 'error');
+            selectedFile = null;
+            fileSummary.hidden = true;
+            audioFileLabel.classList.remove('has-file');
+            updateButtons();
+            return;
+        }
+        if (file.size === 0) {
+            selectedFile = null;
+            audioFileInput.value = '';
+            fileSummary.hidden = true;
+            audioFileLabel.classList.remove('has-file');
+            updateStatus('音频文件不能为空。', 'error');
+            updateButtons();
+            return;
+        }
+        if (file.size > MAX_UPLOAD_BYTES) {
+            selectedFile = null;
+            audioFileInput.value = '';
+            fileSummary.hidden = true;
+            audioFileLabel.classList.remove('has-file');
+            updateStatus(`音频文件过大，最大支持 ${MAX_UPLOAD_MB} MB。`, 'error');
+            updateButtons();
+            return;
+        }
+
+        selectedFile = file;
+        fileNameDisplay.textContent = file.name;
+        fileMetaDisplay.textContent = `${getFileType(file)} · ${formatFileSize(file.size)}`;
+        fileSummary.hidden = false;
+        audioFileLabel.classList.add('has-file');
+        updateButtons();
+    }
+
+    audioFileInput.addEventListener('change', function(event) {
+        handleSelectedFile(event.target.files[0]);
+    });
+
+    ['dragenter', 'dragover'].forEach(function(eventName) {
+        audioFileLabel.addEventListener(eventName, function(event) {
+            event.preventDefault();
+            if (!busy) audioFileLabel.classList.add('is-dragging');
+        });
+    });
+
+    ['dragleave', 'drop'].forEach(function(eventName) {
+        audioFileLabel.addEventListener(eventName, function(event) {
+            event.preventDefault();
+            audioFileLabel.classList.remove('is-dragging');
+        });
+    });
+
+    audioFileLabel.addEventListener('drop', function(event) {
+        if (busy) return;
+        const file = event.dataTransfer?.files?.[0];
+        if (!file) return;
+        try {
+            const transfer = new DataTransfer();
+            transfer.items.add(file);
+            audioFileInput.files = transfer.files;
+        } catch (_error) {
+            audioFileInput.value = '';
+        }
+        handleSelectedFile(file);
+    });
+
+    viewTabs.forEach(function(tab) {
+        tab.addEventListener('click', function() {
+            renderView(tab.dataset.view);
+        });
+    });
+
+    transcriptionForm.addEventListener('submit', async function(event) {
+        event.preventDefault();
+        if (!selectedFile) {
+            updateStatus('未选择音频文件。', 'error');
+            return;
+        }
+        if (!featureConfigured.s2t) {
+            updateStatus('语音转录服务尚未配置。', 'error');
             return;
         }
 
         const formData = new FormData();
-        formData.append('audio_file', file);
-        
-        updateStatus('正在上传和转录音频...', 'info');
-        setActionButtonsDisabledState(true);
-        
-        const submitBtnSpan = submitBtn.querySelector('span') || submitBtn;
-        const originalText = submitBtnSpan.textContent;
-        submitBtnSpan.textContent = '处理中...';
+        formData.append('audio_file', selectedFile);
+        const originalText = getButtonLabel(submitBtn);
+        updateStatus('正在上传并转录音频...', 'info');
+        setBusy(true);
+        setButtonLabel(submitBtn, '转录中');
 
         try {
-            const response = await fetch('/api/transcribe', { method: 'POST', body: formData });
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({ error: `请求失败 (状态 ${response.status})` }));
-                throw new Error(errorData.error);
+            const data = await fetchJson('/api/transcribe', { method: 'POST', body: formData });
+            if (data.status !== 'success') {
+                throw new Error(extractErrorMessage(data, '转录结果格式无效。'));
             }
-            const data = await response.json();
-            if (data.status === "success") {
-                handleSuccess(data, "转录");
-            } else {
-                throw new Error(data.error || '转录失败或返回结果格式不正确。');
-            }
+            handleTranscriptionSuccess(data, '转录');
         } catch (error) {
             console.error('转录错误:', error);
-            updateStatus(`发生错误: ${error.message}`, 'error');
-            currentCalibratedText = null;
+            clearResults();
+            updateStatus(`转录失败: ${error.message}`, 'error');
         } finally {
-            setActionButtonsDisabledState(false);
-            submitBtnSpan.textContent = originalText;
+            setButtonLabel(submitBtn, originalText);
+            setBusy(false);
         }
     });
 
     recalibrateBtn.addEventListener('click', async function() {
-        if (!currentRawTranscription) {
-            updateStatus('没有可供重新校准的原始转录文本。', 'info');
+        if (!currentRawTranscription.trim()) {
+            updateStatus('没有可校准的原始转录。', 'info');
             return;
         }
-        
-        updateStatus('正在重新校准...', 'info');
-        setActionButtonsDisabledState(true);
-        const originalText = recalibrateBtn.textContent;
-        recalibrateBtn.textContent = '校准中...';
 
+        const originalText = getButtonLabel(recalibrateBtn);
+        updateStatus('正在重新校准文本...', 'info');
+        setBusy(true);
+        setButtonLabel(recalibrateBtn, '校准中');
         try {
-            const response = await fetch('/api/recalibrate', {
+            const data = await fetchJson('/api/recalibrate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ raw_transcription: currentRawTranscription })
             });
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({ error: `请求失败 (状态 ${response.status})` }));
-                throw new Error(errorData.error);
+            if (data.status !== 'success') {
+                throw new Error(extractErrorMessage(data, '重新校准失败。'));
             }
-            const data = await response.json();
-            if (data.status === "success") {
-                handleSuccess(data, "重新校准");
-            } else {
-                throw new Error(data.error || '重新校准失败或返回结果格式不正确。');
-            }
+            handleTranscriptionSuccess(data, '重新校准');
         } catch (error) {
             console.error('重新校准错误:', error);
-            updateStatus(`重新校准时发生错误: ${error.message}`, 'error');
+            updateStatus(`重新校准失败: ${error.message}`, 'error');
         } finally {
-            setActionButtonsDisabledState(false);
-            recalibrateBtn.textContent = originalText;
+            setButtonLabel(recalibrateBtn, originalText);
+            setBusy(false);
         }
     });
-    
+
     summarizeBtn.addEventListener('click', async function() {
-        // 情况1：切换视图
-        if (summaryText) {
-            isShowingSummary = !isShowingSummary;
-            if (isShowingSummary) {
-                transcriptionResult.textContent = summaryText;
-                summarizeBtn.textContent = '显示原文';
-            } else {
-                transcriptionResult.textContent = currentCalibratedText;
-                summarizeBtn.textContent = '显示摘要';
-            }
-            // 切换视图后，需要重新评估复制按钮的状态
-            copyBtn.disabled = transcriptionResult.textContent.trim() === '';
+        if (!currentCalibratedText.trim()) {
+            updateStatus('没有可生成摘要的文本。', 'info');
             return;
         }
 
-        // 情况2：首次生成摘要
-        if (!currentCalibratedText || currentCalibratedText.trim() === '') {
-            updateStatus('没有可供总结的文本。', 'info');
-            return;
-        }
-
+        const originalText = getButtonLabel(summarizeBtn);
         updateStatus('正在生成摘要...', 'info');
-        setActionButtonsDisabledState(true);
-        const originalText = summarizeBtn.textContent;
-        summarizeBtn.textContent = '生成中...';
-
+        setBusy(true);
+        setButtonLabel(summarizeBtn, '生成中');
         try {
-            const response = await fetch('/api/summarize', {
+            const data = await fetchJson('/api/summarize', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text_to_summarize: currentCalibratedText })
             });
-            
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({ error: `请求失败 (状态 ${response.status})` }));
-                throw new Error(errorData.error);
+            if (typeof data.summary !== 'string' || !data.summary.trim()) {
+                throw new Error('服务未返回有效摘要。');
             }
-
-            const data = await response.json();
-            if (data.summary) {
-                summaryText = data.summary;
-                isShowingSummary = true;
-                
-                transcriptionResult.textContent = summaryText;
-                updateStatus('摘要生成成功！', 'success');
-                summarizeBtn.textContent = '显示原文';
-            } else {
-                throw new Error('API未能返回有效的摘要内容。');
-            }
-
+            summaryText = data.summary;
+            renderView('summary');
+            updateStatus('摘要已生成。', 'success');
         } catch (error) {
             console.error('生成摘要错误:', error);
-            updateStatus(`生成摘要失败 (${error.message})，请重试...`, 'error');
-            summarizeBtn.textContent = originalText;
+            updateStatus(`摘要生成失败: ${error.message}`, 'error');
+            renderView('source');
         } finally {
-            setActionButtonsDisabledState(false);
+            setButtonLabel(summarizeBtn, summaryText ? '重新生成摘要' : originalText);
+            setBusy(false);
         }
     });
-    
+
     generateNotesBtn.addEventListener('click', async function() {
-        // 情况1：切换视图
-        if (notesText) {
-            isShowingNotes = !isShowingNotes;
-            if (isShowingNotes) {
-                transcriptionResult.textContent = notesText;
-                generateNotesBtn.textContent = '显示原文';
-            } else {
-                transcriptionResult.textContent = currentCalibratedText;
-                generateNotesBtn.textContent = '显示笔记';
-            }
-            // 切换视图后，需要重新评估复制按钮的状态
-            copyBtn.disabled = transcriptionResult.textContent.trim() === '';
+        if (!currentCalibratedText.trim()) {
+            updateStatus('没有可生成笔记的文本。', 'info');
             return;
         }
 
-        // 情况2：首次生成笔记
-        if (!currentCalibratedText || currentCalibratedText.trim() === '') {
-            updateStatus('没有可供生成笔记的文本。', 'info');
-            return;
-        }
-
-        updateStatus('正在生成笔记...', 'info');
-        setActionButtonsDisabledState(true);
-        const originalText = generateNotesBtn.textContent;
-        generateNotesBtn.textContent = '生成中...';
-
+        const originalText = getButtonLabel(generateNotesBtn);
+        updateStatus('正在生成结构化笔记...', 'info');
+        setBusy(true);
+        setButtonLabel(generateNotesBtn, '生成中');
         try {
-            const response = await fetch('/api/generatenote', {
+            const data = await fetchJson('/api/generatenote', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text_to_process: currentCalibratedText })
             });
-            
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({ error: `请求失败 (状态 ${response.status})` }));
-                throw new Error(errorData.error);
+            if (typeof data.notes !== 'string' || !data.notes.trim()) {
+                throw new Error('服务未返回有效笔记。');
             }
-
-            const data = await response.json();
-            if (data.notes) {
-                notesText = data.notes;
-                isShowingNotes = true;
-                
-                transcriptionResult.textContent = notesText;
-                updateStatus('笔记生成成功！', 'success');
-                generateNotesBtn.textContent = '显示原文';
-            } else {
-                throw new Error('API未能返回有效的笔记内容。');
-            }
-
+            notesText = data.notes;
+            renderView('notes');
+            updateStatus('笔记已生成。', 'success');
         } catch (error) {
             console.error('生成笔记错误:', error);
-            updateStatus(`生成笔记失败 (${error.message})，请重试...`, 'error');
-            generateNotesBtn.textContent = originalText;
+            updateStatus(`笔记生成失败: ${error.message}`, 'error');
+            renderView('source');
         } finally {
-            setActionButtonsDisabledState(false);
+            setButtonLabel(generateNotesBtn, notesText ? '重新生成笔记' : originalText);
+            setBusy(false);
         }
     });
-    
-    copyBtn.addEventListener('click', function() {
-        if (copyBtn.disabled) return;
 
-        const textToCopy = transcriptionResult.textContent;
-        const originalBtnText = "复制文本";
-        copyBtn.classList.remove('copied-success', 'copied-error');
+    async function writeToClipboard(text) {
+        if (navigator.clipboard && window.isSecureContext) {
+            try {
+                await navigator.clipboard.writeText(text);
+                return;
+            } catch (_error) {
+                // Permission can be denied even in secure contexts; fall back
+                // to the legacy textarea strategy instead of failing outright.
+            }
+        }
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        let copied = false;
+        try {
+            copied = document.execCommand('copy');
+        } catch (_error) {
+            copied = false;
+        }
+        document.body.removeChild(textarea);
+        if (!copied) throw new Error('浏览器不支持复制操作');
+    }
 
-        if (!textToCopy || textToCopy.trim() === '') {
-            updateStatus('没有可复制的文本。', 'info');
+    copyBtn.addEventListener('click', async function() {
+        const textToCopy = getDisplayedText();
+        if (!textToCopy.trim()) {
+            updateStatus('当前视图没有可复制的内容。', 'info');
             return;
         }
 
-        navigator.clipboard.writeText(textToCopy).then(function() {
-            copyBtn.textContent = '已复制!';
+        copyBtn.classList.remove('copied-success', 'copied-error');
+        try {
+            await writeToClipboard(textToCopy);
+            setButtonLabel(copyBtn, '已复制');
             copyBtn.classList.add('copied-success');
-            setTimeout(function() {
-                copyBtn.textContent = originalBtnText;
-                copyBtn.classList.remove('copied-success');
-            }, 2000);
-        }).catch(function(err) {
-            console.error('无法复制文本: ', err);
-            copyBtn.textContent = '复制失败';
+        } catch (error) {
+            console.error('无法复制文本:', error);
+            setButtonLabel(copyBtn, '复制失败');
             copyBtn.classList.add('copied-error');
-            setTimeout(function() {
-                copyBtn.textContent = originalBtnText;
-                copyBtn.classList.remove('copied-error');
-            }, 3000);
-        });
+        }
+        window.setTimeout(function() {
+            setButtonLabel(copyBtn, '复制');
+            copyBtn.classList.remove('copied-success', 'copied-error');
+        }, 2000);
     });
+
+    if (!featureConfigured.s2t) {
+        submitBtn.title = '语音转录服务尚未配置';
+    }
+    if (!featureConfigured.calibration) {
+        recalibrateBtn.title = '校准服务尚未配置';
+    }
+    if (!featureConfigured.summary) {
+        summarizeBtn.title = '摘要服务尚未配置';
+    }
+    if (!featureConfigured.notes) {
+        generateNotesBtn.title = '笔记服务尚未配置';
+    }
+
+    clearResults();
+    updateButtons();
 });

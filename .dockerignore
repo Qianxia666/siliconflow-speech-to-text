@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.git/
+.agents/
+.codex/
+.env
+.env.*
+tests/
+README.md
