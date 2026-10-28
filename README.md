@@ -10,7 +10,7 @@
 ## 目录
 
 - [功能一览](#功能一览)
-- [快速开始](#快速开始)
+- [部署指南](#部署指南)
 - [配置说明](#配置说明)
 - [使用指南](#使用指南)
 - [API 接口](#api-接口)
@@ -34,52 +34,341 @@
 
 > 只想拿到文字稿？只配置 `S2T_API_KEY` 即可。配置 `OPT_API_KEY` 后，校准、摘要和学术笔记功能会自动启用。
 
-## 快速开始
+## 部署指南
 
-### 环境要求
+即使没有部署经验，也可以按下面的顺序完成：**获取 API Key → 选择部署方式 → 跟随步骤操作 → 打开浏览器验证**。
 
-- Python 3.9+，或 Docker
-- 一个 OpenAI 兼容的语音识别 API Key（必需）
-- 一个 OpenAI 兼容的 Chat Completions API Key（可选，用于文本处理）
+### 先选择部署方式
 
-### 本地运行
+| 方式 | 适合谁 | 需要安装 | 特点 |
+| --- | --- | --- | --- |
+| 本地运行 | 电脑上想直接运行、后续可能改代码 | Python 3.9+ | 启动快，配置稍多 |
+| Docker 部署 | 不想处理 Python 环境问题 | Docker Desktop 或 Docker Engine | 环境隔离，命令更少 |
+
+两种方式任选一种即可。下面的步骤会分别说明 Windows、macOS 和 Linux 的操作。
+
+### 第 0 步：获取 API Key
+
+项目需要两类 API Key，其中语音转录 Key 是必填的。
+
+#### 语音转录 Key（必填）
+
+本项目默认使用 SiliconFlow 的语音识别服务，也可以换成其他 OpenAI 兼容服务。
+
+1. 打开 [SiliconFlow 控制台](https://cloud.siliconflow.cn/)，注册并登录。
+2. 在控制台左侧菜单或账号设置中找到「API 密钥」。
+3. 点击「新建 API 密钥」，名称可以填 `speech-to-text`。
+4. 创建后立即复制密钥并妥善保存（通常以 `sk-` 开头）。
+5. 如果账户余额不足，按控制台提示充值即可。
+
+> API Key 相当于账号密码，不要发给别人，也不要上传到 GitHub。本项目已通过 `.gitignore` 忽略 `.env` 文件。
+
+#### 文本处理 Key（可选）
+
+如果还需要「文本校准、摘要、学术笔记」，需要再准备一个 OpenAI 兼容的对话 API。可以直接复用 SiliconFlow 的账号：
+
+| 配置 | SiliconFlow | OpenAI |
+| --- | --- | --- |
+| `OPT_API_URL` | `https://api.siliconflow.cn/v1/chat/completions` | `https://api.openai.com/v1/chat/completions`（默认值） |
+| `OPT_API_KEY` | 你的 SiliconFlow API Key | 你的 OpenAI API Key |
+| `OPT_MODEL` | 模型广场中的对话模型 ID（如 `Qwen/Qwen2.5-7B-Instruct`，以控制台为准） | 账号可用的模型名称（如 `gpt-4o-mini`，以账号为准） |
+
+> 不配置这部分也可以正常转录，只是不会校准、摘要和生成笔记。
+
+### 方式一：本地运行
+
+适用于 Windows、macOS 和 Linux。核心步骤是：安装 Python → 下载项目 → 安装依赖 → 设置环境变量 → 启动。
+
+#### 1. 安装 Python
+
+要求 Python 3.9 或更高版本。
+
+**Windows**
+
+1. 打开 [Python 官方下载页](https://www.python.org/downloads/)，下载最新的 Windows 安装包。
+2. 运行安装包，务必勾选 **Add python.exe to PATH**，然后点击 **Install Now**。
+3. 安装完成后，重新打开 PowerShell，输入：
+   ```powershell
+   python --version
+   ```
+   能看到 `Python 3.9` 以上的版本号即安装成功。
+
+**macOS**
+
+1. 打开 [Python 官方下载页](https://www.python.org/downloads/) 下载 macOS 安装包，或使用 Homebrew 安装：`brew install python`。
+2. 打开「终端」，输入：
+   ```bash
+   python3 --version
+   ```
+
+**Linux**
+
+1. 打开终端，先检查版本：
+   ```bash
+   python3 --version
+   ```
+2. 如果提示找不到命令，Ubuntu / Debian 可以执行：
+   ```bash
+   sudo apt update
+   sudo apt install -y python3 python3-venv python3-pip
+   ```
+   其他发行版请使用对应的包管理器安装。
+
+> Windows 使用 `python`，macOS / Linux 通常使用 `python3`。后面的命令请按你的系统选择。
+
+#### 2. 下载项目
+
+**已安装 Git（推荐）**
 
 ```bash
-# 1. 安装依赖
+git clone https://github.com/Qianxia666/siliconflow-speech-to-text
+cd siliconflow-speech-to-text
+```
+
+**没有安装 Git**
+
+1. 打开项目仓库，点击绿色的 **Code** 按钮，选择 **Download ZIP**。
+2. 解压下载的压缩包。
+3. 进入解压后的文件夹，在文件夹空白处按住 **Shift** 再点右键，选择「在此处打开 PowerShell 窗口」（Windows），或在 macOS / Linux 中打开终端后 `cd` 到该文件夹。
+
+> 后续所有命令都需要在项目文件夹中执行。如果解压后的文件夹名带 `-main`，请把 `cd` 后面的名字替换成实际文件夹名。
+
+#### 3. 创建虚拟环境（推荐，可跳过）
+
+虚拟环境可以避免弄乱电脑上已有的 Python 环境。如果不想创建，直接跳到第 4 步也可以。
+
+**Windows PowerShell**
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+如果提示「无法加载文件，因为在此系统上禁止运行脚本」，先执行下面的命令，再重新激活：
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
+也可以在传统 cmd 窗口中执行 `.\.venv\Scripts\activate.bat`。
+
+**macOS / Linux**
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+激活成功后，命令行开头会出现 `(.venv)`。之后使用 `python` 或 `python3` 都可以。
+
+#### 4. 安装依赖
+
+```bash
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
+```
 
-# 2. 配置环境变量（最简：只启用转录）
-export S2T_API_KEY="sk-your-s2t-key"
+如果国内网络下载较慢，可以使用清华镜像：
 
-# 可选：启用校准、摘要与学术笔记
-export OPT_API_URL="https://api.openai.com/v1/chat/completions"
-export OPT_API_KEY="sk-your-opt-key"
-export OPT_MODEL="gpt-4o-mini"
+```bash
+python -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
 
-# 3. 启动
+安装过程中出现大量进度条是正常的；最后没有红色报错即成功。如果未创建虚拟环境，macOS / Linux 请把 `python` 换成 `python3`。
+
+#### 5. 设置环境变量
+
+环境变量就是程序启动时读取的配置。最少只需要设置 `S2T_API_KEY`。
+
+**Windows PowerShell**
+
+```powershell
+$env:S2T_API_KEY = "sk-你的语音转录密钥"
+
+# 可选：启用文本校准、摘要与学术笔记
+$env:OPT_API_URL = "https://api.siliconflow.cn/v1/chat/completions"
+$env:OPT_API_KEY = "sk-你的文本处理密钥"
+$env:OPT_MODEL = "Qwen/Qwen2.5-7B-Instruct"
+```
+
+**macOS / Linux**
+
+```bash
+export S2T_API_KEY="sk-你的语音转录密钥"
+
+# 可选：启用文本校准、摘要与学术笔记
+export OPT_API_URL="https://api.siliconflow.cn/v1/chat/completions"
+export OPT_API_KEY="sk-你的文本处理密钥"
+export OPT_MODEL="Qwen/Qwen2.5-7B-Instruct"
+```
+
+> 这样设置只对**当前终端窗口**有效，关闭窗口后需要重新设置。若希望长期保存：
+>
+> - Windows：在开始菜单搜索「环境变量」→「编辑系统环境变量」→「环境变量」→ 在「用户变量」中逐项新建。
+> - macOS / Linux：把 `export` 语句追加到 `~/.zshrc`（macOS）或 `~/.bashrc`（Linux），再执行 `source ~/.zshrc` 或 `source ~/.bashrc`。
+>
+> 应用不会自动读取 `.env` 文件；`.env.example` 是配置清单，Docker 部署时才会用到。
+
+#### 6. 启动服务
+
+```bash
 python app.py
 ```
 
-启动后访问 <http://127.0.0.1:5000/>。
+启动成功时终端会显示类似内容：
 
-> 应用不会自动读取 `.env` 文件。`.env.example` 是完整的配置清单；本地运行时请通过 shell 或进程管理工具注入环境变量，Docker 可直接使用 `--env-file`。
-
-### Docker 部署
-
-```bash
-cp .env.example .env   # 填写 S2T_API_KEY 等配置
-docker build -t speech-to-text .
-
-docker run -d --name speech-to-text \
-  --env-file .env \
-  -p 5000:5000 \
-  speech-to-text
+```text
+服务器正在启动，监听 http://0.0.0.0:5000
 ```
 
-如果修改了 `.env` 中的 `PORT`，请同步调整端口映射，例如 `PORT=8080` 时使用 `-p 8080:8080`。容器健康检查会自动跟随该端口。
+此时不要关闭终端，打开浏览器访问 <http://127.0.0.1:5000/>。需要停止服务时，在终端按 `Ctrl + C`。
+
+想换端口可以先设置环境变量再启动，例如 Windows `$env:PORT = "8080"`、macOS / Linux `export PORT=8080`，然后访问 `http://127.0.0.1:8080/`。
+
+### 方式二：Docker 部署
+
+适合不想安装 Python、或希望环境更干净的情况。
+
+#### 1. 安装 Docker
+
+**Windows / macOS**
+
+1. 打开 [Docker Desktop 下载页](https://www.docker.com/products/docker-desktop/)，下载并安装。
+2. Windows 需要开启 WSL2 或虚拟化支持，安装向导会给出提示；安装完成后建议重启电脑。
+3. 启动 Docker Desktop，等待右下角（或菜单栏）图标显示 Engine 已运行。
+
+**Linux**
+
+按照 [Docker Engine 官方安装文档](https://docs.docker.com/engine/install/) 安装对应发行版的版本。
+
+安装完成后，打开终端确认：
+
+```bash
+docker --version
+docker info
+```
+
+两条命令都能正常输出，说明 Docker 已就绪。
+
+#### 2. 下载项目
+
+```bash
+git clone https://github.com/Qianxia666/siliconflow-speech-to-text
+cd siliconflow-speech-to-text
+```
+
+没有 Git 时，按方式一第 2 步的「Download ZIP」方式下载并解压，然后在项目文件夹中打开终端。
+
+#### 3. 创建并填写配置文件
+
+先复制一份配置模板：
+
+**Windows PowerShell**
+
+```powershell
+Copy-Item .env.example .env
+```
+
+**macOS / Linux**
+
+```bash
+cp .env.example .env
+```
+
+然后用文本编辑器打开 `.env`：
+
+- Windows：`notepad .env`
+- macOS：`open -e .env`
+- Linux：`nano .env`
+
+至少填写下面这一项：
+
+```dotenv
+S2T_API_KEY=sk-你的语音转录密钥
+```
+
+其余配置都有默认值，暂时不用修改。
+
+需要校准、摘要和笔记时，再填写：
+
+```dotenv
+OPT_API_URL=https://api.siliconflow.cn/v1/chat/completions
+OPT_API_KEY=sk-你的文本处理密钥
+OPT_MODEL=Qwen/Qwen2.5-7B-Instruct
+```
+
+填写时注意：
+
+- 每行格式为 `变量名=值`，等号两边不要留空格，值不要加引号。
+- 以 `#` 开头的行是注释，不会生效。
+- 保存文件后关闭编辑器，`.env` 必须放在项目文件夹根目录。
+
+> 如果还要使用 OpenAI 兼容 API，可在 `.env` 中额外设置 `API_ACCESS_TOKEN=你的访问令牌`。完整变量见 [配置说明](#配置说明)。
+
+#### 4. 构建镜像
+
+```bash
+docker build -t speech-to-text .
+```
+
+命令最后的 `.` 表示使用当前目录的 Dockerfile，不能省略。首次构建需要下载 Python 基础镜像并安装依赖，可能需要几分钟；看到 `Successfully tagged` 或类似提示即完成。
+
+#### 5. 启动容器
+
+```bash
+docker run -d --name speech-to-text --env-file .env -p 5000:5000 speech-to-text
+```
+
+参数含义：
+
+- `-d`：在后台运行，不占用当前终端。
+- `--name speech-to-text`：给容器起名，方便后续管理。
+- `--env-file .env`：读取刚才填写的配置。
+- `-p 5000:5000`：把电脑的 5000 端口映射到容器的 5000 端口。
+
+确认容器正在运行：
+
+```bash
+docker ps
+```
+
+状态显示 `Up` 即启动成功。查看日志：
+
+```bash
+docker logs -f speech-to-text
+```
+
+按 `Ctrl + C` 只会退出日志查看，不会停止容器。随后打开浏览器访问 <http://127.0.0.1:5000/>。
+
+如果电脑的 5000 端口已被占用，可以改用其他本机端口，例如：
+
+```bash
+docker run -d --name speech-to-text --env-file .env -p 8080:5000 speech-to-text
+```
+
+然后访问 `http://127.0.0.1:8080/`。注意：容器内端口仍由 `PORT` 决定（默认 `5000`），`-p` 冒号前面才是电脑上的端口。
+
+如果提示容器名已存在，先执行 `docker rm -f speech-to-text`，再重新运行 `docker run`。
+
+> Linux 如果提示 `permission denied`，请在命令前加 `sudo`，或按 Docker 官方文档把当前用户加入 `docker` 用户组。
+
+#### 6. 日常管理命令
+
+| 操作 | 命令 |
+| --- | --- |
+| 查看运行状态 | `docker ps` |
+| 查看日志 | `docker logs -f speech-to-text` |
+| 停止容器 | `docker stop speech-to-text` |
+| 再次启动 | `docker start speech-to-text` |
+| 修改 `.env` 后重新创建 | `docker rm -f speech-to-text`，再重新执行 `docker run` |
+| 更新代码后重新部署 | `git pull` → `docker build -t speech-to-text .` → 删除旧容器并重新 `docker run` |
+| 删除容器 | `docker rm -f speech-to-text` |
+| 删除镜像 | `docker rmi speech-to-text` |
 
 <details>
-<summary>使用 Docker Compose</summary>
+<summary>可选：使用 Docker Compose 管理</summary>
+
+在项目文件夹中新建 `docker-compose.yml`：
 
 ```yaml
 services:
@@ -93,19 +382,21 @@ services:
     restart: unless-stopped
 ```
 
+然后执行：
+
 ```bash
-docker compose up -d --build
+docker compose up -d --build   # 构建并启动
+docker compose logs -f         # 查看日志
+docker compose down            # 停止并删除
 ```
 
 </details>
 
-### 验证服务
+### 最后一步：验证部署
 
-```bash
-curl -s http://127.0.0.1:5000/healthz
-```
-
-返回示例：
+1. 浏览器打开 <http://127.0.0.1:5000/>，能看到「声稿 · 音频转录工作台」页面。
+2. 左侧「处理能力」会显示四项服务的状态。只配置了 `S2T_API_KEY` 时，「语音转录」为可用，其余为未配置。
+3. 在浏览器打开 <http://127.0.0.1:5000/healthz>，正常返回类似：
 
 ```json
 {
@@ -120,11 +411,19 @@ curl -s http://127.0.0.1:5000/healthz
 }
 ```
 
-`*_configured` 字段表示对应能力是否已正确配置；即使某项为 `false`，服务本身仍会正常启动。
+4. 选择一段较短的音频（建议先用 1 分钟以内的文件），点击「开始转录」。右侧出现文字即部署成功。
+
+如果 `s2t_configured` 为 `false`，说明转录 Key 或地址没有配置正确；如果 `calibration_configured` 等为 `false`，说明文本处理配置缺失，但不影响转录。
+
+### 停止与再次启动
+
+- 本地运行：在运行 `python app.py` 的终端按 `Ctrl + C` 停止。再次启动前需要重新设置环境变量（如果之前没有做长期配置）。
+- Docker：执行 `docker stop speech-to-text` 停止，`docker start speech-to-text` 再次启动。
+- 修改 `.env` 后，Docker 容器不会自动读取新配置，需要删除旧容器并重新创建。
 
 ## 配置说明
 
-所有配置均通过环境变量注入，完整示例见 [.env.example](.env.example)。
+所有配置均通过环境变量注入。本地运行时在终端设置；Docker 部署时填写在 `.env` 文件中。完整示例见 [.env.example](.env.example)。
 
 ### 语音转录
 
@@ -344,6 +643,48 @@ ruff format --check .
 
 ## 常见问题
 
+### 部署与启动
+
+**输入 `python` 提示「不是内部或外部命令」怎么办？**
+
+Windows 安装 Python 时没有勾选 **Add python.exe to PATH**。重新运行安装包，选择 Modify，勾选该选项；或者卸载后重新安装并勾选。安装完成后必须重新打开终端。
+
+**PowerShell 提示「禁止运行脚本」，虚拟环境无法激活怎么办？**
+
+执行：
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
+然后重新激活虚拟环境。也可以跳过虚拟环境，直接安装依赖并运行。
+
+**`pip install` 很慢或超时怎么办？**
+
+使用国内镜像：
+
+```bash
+python -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+**启动时提示端口被占用怎么办？**
+
+本地运行可以设置 `PORT=8080` 后重启；Docker 可以改用 `-p 8080:5000`，然后访问 `http://127.0.0.1:8080/`。
+
+**修改 `.env` 后 Docker 没有生效？**
+
+运行中的容器不会重新读取 `.env`。执行 `docker rm -f speech-to-text` 删除旧容器，再重新执行 `docker run`。
+
+**Docker 构建时卡在拉取镜像怎么办？**
+
+先确认网络能够访问 Docker Hub，或检查 Docker Desktop 的代理 / 镜像加速器设置。也可以改用本地 Python 方式运行。
+
+**Docker 提示 `permission denied` 怎么办？**
+
+Linux 下在命令前加 `sudo`，或按 Docker 文档把当前用户加入 `docker` 用户组后重新登录。
+
+### 使用问题
+
 **没有 `OPT_API_KEY` 还能用吗？**
 
 可以。转录仍会正常返回原始文本，只是跳过校准；摘要与笔记接口会返回配置不可用的错误，前端对应按钮也会禁用。
@@ -352,17 +693,17 @@ ruff format --check .
 
 格式由上游语音识别服务决定，界面支持常见音频类型（MP3、WAV、M4A、FLAC 等）。默认单文件上限为 100 MB，可通过 `MAX_UPLOAD_MB` 调整。
 
+**页面能打开，但点击转录后报错？**
+
+先检查运行终端或 `docker logs` 中的错误信息，再确认 `S2T_API_KEY` 是否填写正确、账户是否有余额。也可以打开 `/healthz` 查看 `s2t_configured` 是否为 `true`。
+
+**校准、摘要或笔记按钮是灰色的？**
+
+对应服务没有配置完整。检查 `OPT_API_KEY`、`OPT_API_URL`、`OPT_MODEL`（或对应的专用模型变量），并查看 `/healthz` 中的配置状态。
+
 **调用 `/v1/*` 返回 `503 API access is not configured`？**
 
 说明服务端没有设置 `API_ACCESS_TOKEN`。配置该变量并重启服务后即可使用 OpenAI 兼容接口。
-
-**转录成功但文本没有校准？**
-
-检查 `/healthz` 中的 `calibration_configured`，以及 `OPT_API_KEY`、`OPT_MODEL` 是否正确；也可以查看服务日志中的配置检查信息。
-
-**如何修改监听端口？**
-
-设置 `PORT`。本地运行直接生效；Docker 部署时请同步修改端口映射与健康检查所依赖的环境变量。
 
 **长文本被拒绝处理？**
 
