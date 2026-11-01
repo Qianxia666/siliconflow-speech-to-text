@@ -95,6 +95,9 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function updateWorkspaceStatus() {
+        document.body.dataset.stage = busy ? 'busy'
+            : currentCalibratedText.trim() ? 'done'
+            : selectedFile ? 'ready' : 'idle';
         if (busy) {
             workspaceStatus.textContent = '正在处理';
             workspaceStatus.dataset.state = 'busy';
